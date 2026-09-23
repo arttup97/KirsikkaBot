@@ -256,6 +256,20 @@ async def simulate(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await say(update, f"Added {n} fake player(s) with songs. /startgame when ready.")
 
 
+def _dev_breakdown(g, r):
+    """Dev-only: every eligible player in order with their guess (or none) -
+    shown after /next, not during voting."""
+    s = g["songs"][r]
+    votes = g["votes"].get(str(r), {})
+    names = all_names(g)
+    picker = s["by"]
+    eligible = sorted((u, n) for u, n in g["names"].items() if u != picker)
+    lines = [f"{name}→{names.get(votes[uid], votes[uid])}" if uid in votes
+             else f"{name}→(no vote)"
+             for uid, name in eligible]
+    return "🔍 [dev]\n" + "\n".join(lines)
+
+
 async def next_round(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     g = host_game(update)
     if not g or g["status"] != "voting":
@@ -277,6 +291,9 @@ async def next_round(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
               f"🎤 {song['title']}\nwas picked by… {names[picker]}!\n\n"
               f"✅ Guessed right: {', '.join(names[v] for v in right) or 'nobody'}\n"
               f"😈 {names[picker]} fooled {fooled} friend(s)")
+
+    if DEV_MODE:
+        await say(update, _dev_breakdown(g, r))
 
     g["round"] += 1
     if g["round"] >= len(g["songs"]):

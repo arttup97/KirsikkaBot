@@ -102,6 +102,10 @@ vote buttons — hard to exercise alone. Set `DEV_MODE=1` to unlock:
   even if you're the only real person tapping buttons.
 - **Relaxed minimum** — `/startgame` only needs 1 real submitter instead
   of 2.
+- **Vote breakdown after `/next`** — a follow-up message lists every
+  eligible player (everyone except that round's picker) and who they
+  guessed, or `(no vote)` if they haven't voted yet — handy for checking
+  the simulated votes landed the way you expected.
 
 Example solo playthrough:
 
