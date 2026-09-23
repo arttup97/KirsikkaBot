@@ -31,6 +31,11 @@ TOKEN = os.environ["TELEGRAM_TOKEN"]
 MAX_SONGS = int(os.environ.get("MAX_SONGS", 3))
 DATA_FILE = "games.json"
 
+# Set DEV_MODE=1 to unlock solo-testing helpers: /simulate seeds fake
+# players+songs into the current game, fake players auto-vote each round,
+# and the "need 2+ submitters" rule relaxes to 1. Never set this in prod.
+DEV_MODE = os.environ.get("DEV_MODE", "").lower() in ("1", "true", "yes")
+
 # Spotify integration is optional - see the module docstring. When the
 # client id/secret aren't set we skip importing/using spotipy entirely so
 # the bot runs with zero Spotify setup.
@@ -98,6 +103,12 @@ def spotify_entry(track):
     return {"uri": track["uri"], "title": track_title(track)}
 
 
+FAKE_SONGS = [
+    "Fake Song One – Tester A", "Fake Song Two – Tester B", "Fake Song Three – Tester C",
+    "Fake Song Four – Tester D", "Fake Song Five – Tester E", "Fake Song Six – Tester F",
+]
+
+
 def manual_entry(text):
     """Build a stored song entry from raw user text (manual mode).
 
@@ -143,8 +154,20 @@ def leaderboard(g):
                      for i, (u, p) in enumerate(rows))
 
 
+def _simulate_votes(g, r):
+    """Dev-only: fake players cast a random guess so /next has more than
+    just your own vote to work with while testing solo."""
+    candidates = list(g["names"])
+    for uid in g["names"]:
+        if uid.startswith("bot_"):
+            g["votes"].setdefault(str(r), {})[uid] = random.choice(candidates)
+    save()
+
+
 async def post_round(ctx, chat_id, g):
     r = g["round"]
+    if DEV_MODE:
+        _simulate_votes(g, r)
     btns = [Btn(n, callback_data=f"vote:{r}:{u}")
             for u, n in sorted(g["names"].items(), key=lambda x: x[1])]
     kb = [btns[i:i + 2] for i in range(0, len(btns), 2)]
@@ -184,8 +207,9 @@ async def startgame(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not g or g["status"] != "collecting":
         return await say(update, "Only the host can start a game that's collecting songs.")
     submitters = {s["by"] for s in g["songs"]}
-    if len(submitters) < 2:
-        return await say(update, "Need songs from at least 2 people first.")
+    min_players = 1 if DEV_MODE else 2
+    if len(submitters) < min_players:
+        return await say(update, f"Need songs from at least {min_players} people first.")
 
     g["names"] = {u: n for u, n in g["names"].items() if u in submitters}
     random.shuffle(g["songs"])
@@ -211,6 +235,25 @@ async def startgame(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     g["status"], g["round"] = "voting", 0
     save()
     await post_round(ctx, update.effective_chat.id, g)
+
+
+async def simulate(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Dev-only: seed the current game with fake players + songs so you can
+    play through /startgame, voting, and /next without other real accounts.
+    Usage: /simulate [count] (default 2)."""
+    if not DEV_MODE:
+        return await say(update, "Set DEV_MODE=1 when running the bot to enable /simulate.")
+    g = host_game(update)
+    if not g or g["status"] != "collecting":
+        return await say(update, "Start a game with /newgame first (while it's still collecting).")
+    n = int(ctx.args[0]) if ctx.args and ctx.args[0].isdigit() else 2
+    n = max(1, min(n, len(FAKE_SONGS)))
+    existing = sum(1 for u in g["names"] if u.startswith("bot_"))
+    for i in range(n):
+        idx = existing + i + 1
+        add_song(g, f"bot_{idx}", f"Test Bot {idx}",
+                  {"uri": f"fake:{idx}", "title": FAKE_SONGS[(idx - 1) % len(FAKE_SONGS)]})
+    await say(update, f"Added {n} fake player(s) with songs. /startgame when ready.")
 
 
 async def next_round(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -358,13 +401,16 @@ def main():
     app = ApplicationBuilder().token(TOKEN).build()
     group, dm = filters.ChatType.GROUPS, filters.ChatType.PRIVATE
     for name, fn in [("newgame", newgame), ("players", players), ("startgame", startgame),
-                     ("next", next_round), ("scores", scores), ("endgame", endgame)]:
+                     ("next", next_round), ("scores", scores), ("endgame", endgame),
+                     ("simulate", simulate)]:
         app.add_handler(CommandHandler(name, fn, filters=group))
     for name, fn in [("start", dm_start), ("mysongs", mysongs), ("undo", undo)]:
         app.add_handler(CommandHandler(name, fn, filters=dm))
     app.add_handler(MessageHandler(dm & filters.TEXT & ~filters.COMMAND, dm_text))
     app.add_handler(CallbackQueryHandler(on_add, pattern=r"^add:"))
     app.add_handler(CallbackQueryHandler(on_vote, pattern=r"^vote:"))
+    if DEV_MODE:
+        print("DEV_MODE is on: /simulate is available, fake players auto-vote, min players = 1.")
     print("Bot running…")
     app.run_polling()
 
